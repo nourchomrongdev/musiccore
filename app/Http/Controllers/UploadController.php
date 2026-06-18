@@ -11,6 +11,7 @@ use App\Support\SupabaseStorage;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\DB;
 
 class UploadController extends Controller
 {
@@ -263,21 +264,56 @@ class UploadController extends Controller
                 $albumTitle = $album ? $album->title : $request->input('album');
             }
 
-            $track = Track::create([
-                'title' => $request->input('title'),
+            Log::info('Audio file stored', [
+                'disk' => 'supabase_music',
+                'path' => $path,
                 'user_id' => $request->user()?->id,
-                'artist_name' => $artist,
-                'album_id' => $albumId,
-                'album' => $albumTitle ?? $request->input('album'),
-                'genre_id' => $request->input('genre_id'),
-                'audio_file' => $path,
-                'cover_image' => $coverPath,
-                'status' => 'published',
+            ]);
+
+            try {
+                $track = DB::transaction(function () use ($request, $artist, $albumId, $albumTitle, $path, $coverPath) {
+                    return Track::create([
+                        'title' => $request->input('title'),
+                        'user_id' => $request->user()?->id,
+                        'artist_name' => $artist,
+                        'album_id' => $albumId,
+                        'album' => $albumTitle ?? $request->input('album'),
+                        'genre_id' => $request->input('genre_id'),
+                        'audio_file' => $path,
+                        'cover_image' => $coverPath,
+                        'status' => 'published',
+                    ]);
+                });
+            } catch (\Throwable $e) {
+                Storage::disk('supabase_music')->delete($path);
+                if ($coverPath) {
+                    Storage::disk('supabase_images')->delete($coverPath);
+                }
+
+                Log::error('Track database insert failed after file upload', [
+                    'message' => $e->getMessage(),
+                    'audio_path' => $path,
+                    'cover_path' => $coverPath,
+                    'user_id' => $request->user()?->id,
+                ]);
+
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Audio was uploaded, but the track could not be saved to the database.',
+                ], 500);
+            }
+
+            Log::info('Track uploaded', [
+                'track_id' => $track->id,
+                'user_id' => $track->user_id,
+                'audio_file' => $track->audio_file,
+                'cover_image' => $track->cover_image,
             ]);
 
             return response()->json([
                 'success' => true,
                 'track' => $track,
+                'audio_file' => $path,
                 'url' => SupabaseStorage::musicUrl($path),
             ], 201);
         } catch (\Illuminate\Validation\ValidationException $e) {
