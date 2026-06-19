@@ -41,7 +41,7 @@ class OtpMail extends Mailable implements ShouldQueue
     public function content(): Content
     {
         return new Content(
-            markdown: 'emails.otp',
+            view: 'emails.otp',
             text: 'emails.otp-text',
             with: [
                 'otp' => $this->otp,
