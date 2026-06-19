@@ -42,7 +42,6 @@ class AuthController extends Controller
             ];
         } catch (Exception $e) {
             Log::error('IssueToken Error: ' . $e->getMessage());
-            // Fallback: issue token without extra fields if migration not run
             $token = $user->createToken('auth_token');
             return [
                 'user' => $user->makeVisible(['profile_image_url', 'profile_pic_url', 'name']),
@@ -64,7 +63,8 @@ class AuthController extends Controller
     private function sendOtpTo(string $email, string $successMessage)
     {
         $email = strtolower(trim($email));
-        $otp = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+        // Ensure 6 digits
+        $otp = (string) random_int(100000, 999999);
 
         try {
             Otp::updateOrCreate(
@@ -72,51 +72,16 @@ class AuthController extends Controller
                 ['otp' => $otp, 'expires_at' => now()->addMinutes(15)]
             );
 
-            // Use queue() for instant response (asynchronous sending)
-            Mail::to($email)->queue(new OtpMail($otp, $email));
+            // CHANGED: Use send() instead of queue() for immediate delivery and debugging
+            // This will tell us if the SMTP settings are finally correct.
+            Mail::to($email)->send(new OtpMail($otp, $email));
 
-            Log::info("OTP queued successfully for: $email");
+            Log::info("OTP sent successfully to: $email with code: $otp");
             return response()->json(['message' => $successMessage]);
         } catch (Exception $e) {
-            Log::error('OTP logic/mail failure: ' . $e->getMessage());
-            return response()->json(['message' => 'Failed to send verification code. Please try again.'], 500);
+            Log::error('OTP Mail Error: ' . $e->getMessage());
+            return response()->json(['message' => 'Email delivery failed: ' . $e->getMessage()], 500);
         }
-    }
-
-    private function verifySocialToken(string $provider, string $token): ?array
-    {
-        if (!in_array($provider, ['google', 'facebook'], true)) return null;
-
-        $projectId = config('services.firebase.project_id');
-        if (!$projectId) return null;
-
-        $segments = explode('.', $token);
-        if (count($segments) !== 3) return null;
-
-        [$encodedHeader, $encodedPayload, $encodedSignature] = $segments;
-        $header = json_decode(base64_decode(strtr($encodedHeader, '-_', '+/')), true);
-        $payload = json_decode(base64_decode(strtr($encodedPayload, '-_', '+/')), true);
-        $signature = base64_decode(strtr($encodedSignature, '-_', '+/'));
-
-        if (!$header || !$payload || !$signature || ($header['alg'] ?? null) !== 'RS256') return null;
-
-        $certs = Cache::remember('firebase_certs', 21600, function () {
-            return Http::get('https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com')->json();
-        });
-
-        $kid = $header['kid'] ?? null;
-        if (!$kid || empty($certs[$kid])) return null;
-
-        if (openssl_verify($encodedHeader . '.' . $encodedPayload, $signature, $certs[$kid], OPENSSL_ALGO_SHA256) !== 1) return null;
-
-        if (($payload['aud'] ?? null) !== $projectId || ($payload['iss'] ?? null) !== 'https://securetoken.google.com/' . $projectId || ($payload['exp'] ?? 0) < time()) return null;
-
-        return [
-            'id' => $payload['sub'],
-            'email' => $payload['email'],
-            'name' => $payload['name'] ?? null,
-            'picture' => $payload['picture'] ?? null,
-        ];
     }
 
     public function register(Request $request)
@@ -287,7 +252,6 @@ class AuthController extends Controller
             $tokens = $user->tokens()->orderByDesc('created_at')->get();
 
             $sessions = $tokens->map(function ($token) use ($currentTokenId) {
-                // Safeguard against missing columns if migration not run
                 return [
                     'id' => $token->id,
                     'device_name' => $token->device_name ?? 'Device',
@@ -306,7 +270,7 @@ class AuthController extends Controller
             ]);
         } catch (Exception $e) {
             Log::error('SecurityOverview Error: ' . $e->getMessage());
-            return response()->json(['message' => 'Failed to load security data: ' . $e->getMessage()], 500);
+            return response()->json(['message' => 'Failed to load security data'], 500);
         }
     }
 
