@@ -63,7 +63,6 @@ class AuthController extends Controller
     private function sendOtpTo(string $email, string $successMessage)
     {
         $email = strtolower(trim($email));
-        // Ensure 6 digits
         $otp = (string) random_int(100000, 999999);
 
         try {
@@ -72,15 +71,41 @@ class AuthController extends Controller
                 ['otp' => $otp, 'expires_at' => now()->addMinutes(15)]
             );
 
-            // CHANGED: Use send() instead of queue() for immediate delivery and debugging
-            // This will tell us if the SMTP settings are finally correct.
-            Mail::to($email)->send(new OtpMail($otp, $email));
+            // Bypassing SMTP and using Resend HTTP API directly to avoid Railway port blocks
+            $apiKey = env('MAIL_PASSWORD'); 
+            $fromEmail = env('MAIL_FROM_ADDRESS', 'onboarding@resend.dev');
 
-            Log::info("OTP sent successfully to: $email with code: $otp");
-            return response()->json(['message' => $successMessage]);
+            $response = Http::withToken($apiKey)->post('https://api.resend.com/emails', [
+                'from' => 'MusicStream <' . $fromEmail . '>',
+                'to' => [$email],
+                'subject' => 'Security Verification Code - MusicStream',
+                'html' => '
+                    <div style="font-family: sans-serif; padding: 20px; color: #333;">
+                        <h2>Security Verification Code</h2>
+                        <p>Hello,</p>
+                        <p>Your verification code for <strong>MusicStream</strong> is:</p>
+                        <div style="font-size: 32px; font-weight: bold; color: #2336B8; letter-spacing: 5px; padding: 10px; background: #f4f4f4; border-radius: 8px; display: inline-block;">' . $otp . '</div>
+                        <p>This code will expire in 15 minutes.</p>
+                        <p>If you did not request this code, please ignore this email.</p>
+                        <div style="margin-top: 20px; font-size: 12px; color: #777;">
+                            &copy; ' . date('Y') . ' MusicStream. All rights reserved.
+                        </div>
+                    </div>',
+            ]);
+
+            if ($response->successful()) {
+                Log::info("OTP sent via Resend API to: $email");
+                return response()->json(['message' => $successMessage]);
+            } else {
+                Log::error('Resend API Failure: ' . $response->body());
+                throw new Exception('API Response Error: ' . $response->body());
+            }
+
         } catch (Exception $e) {
             Log::error('OTP Mail Error: ' . $e->getMessage());
-            return response()->json(['message' => 'Email delivery failed: ' . $e->getMessage()], 500);
+            // Fallback to log if API fails
+            Log::info("FALLBACK: OTP for $email is $otp");
+            return response()->json(['message' => 'Email delivery failed. Code saved to logs.'], 500);
         }
     }
 
@@ -192,8 +217,8 @@ class AuthController extends Controller
         $user->bio = $validated['bio'] ?? $user->bio;
 
         if ($request->hasFile('profile_image')) {
-            if ($user->profile_image) Storage::disk('supabase_images')->delete($user->profile_image);
-            $user->profile_image = $request->file('profile_image')->store('profile_images', 'supabase_images');
+            if ($user->profile_image) Storage::disk('public')->delete($user->profile_image);
+            $user->profile_image = $request->file('profile_image')->store('profile_images', 'public');
         }
 
         $user->save();
