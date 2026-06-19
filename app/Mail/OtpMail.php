@@ -9,7 +9,7 @@ use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Envelope;
 use Illuminate\Queue\SerializesModels;
 
-class OtpMail extends Mailable
+class OtpMail extends Mailable implements ShouldQueue
 {
     use Queueable, SerializesModels;
 
@@ -31,7 +31,7 @@ class OtpMail extends Mailable
     public function envelope(): Envelope
     {
         return new Envelope(
-            subject: 'Password Reset Code - Music Player',
+            subject: 'Security Verification Code - MusicStream',
         );
     }
 
@@ -40,7 +40,9 @@ class OtpMail extends Mailable
      */
     public function content(): Content
     {
+        // Check if plain text template exists, otherwise use basic content
         return new Content(
+            view: 'emails.otp', // Changed to view to support both
             text: 'emails.otp-text',
             with: [
                 'otp' => $this->otp,

@@ -53,8 +53,8 @@ class AuthController extends Controller
 
     private function validOtp(string $email, string $code): ?Otp
     {
-        $record = Otp::where('email', strtolower($email))
-            ->where('otp', $code)
+        $record = Otp::where('email', strtolower(trim($email)))
+            ->where('otp', trim($code))
             ->first();
 
         if (!$record || now()->gt($record->expires_at)) return null;
@@ -63,22 +63,24 @@ class AuthController extends Controller
 
     private function sendOtpTo(string $email, string $successMessage)
     {
-        $email = strtolower($email);
+        $email = strtolower(trim($email));
         $otp = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
 
-        Otp::updateOrCreate(
-            ['email' => $email],
-            ['otp' => $otp, 'expires_at' => now()->addMinutes(15)]
-        );
-
         try {
-            Mail::to($email)->send(new OtpMail($otp, $email));
-        } catch (Exception $e) {
-            Log::error('Failed to send OTP email: ' . $e->getMessage());
-            return response()->json(['message' => 'Failed to send email.'], 500);
-        }
+            Otp::updateOrCreate(
+                ['email' => $email],
+                ['otp' => $otp, 'expires_at' => now()->addMinutes(15)]
+            );
 
-        return response()->json(['message' => $successMessage]);
+            // Use queue() for instant response (asynchronous sending)
+            Mail::to($email)->queue(new OtpMail($otp, $email));
+
+            Log::info("OTP queued successfully for: $email");
+            return response()->json(['message' => $successMessage]);
+        } catch (Exception $e) {
+            Log::error('OTP logic/mail failure: ' . $e->getMessage());
+            return response()->json(['message' => 'Failed to send verification code. Please try again.'], 500);
+        }
     }
 
     private function verifySocialToken(string $provider, string $token): ?array
@@ -176,15 +178,27 @@ class AuthController extends Controller
 
     public function forgotPassword(Request $request)
     {
-        $user = User::where('email', strtolower($request->email))->first();
-        if (!$user) return response()->json(['message' => 'User not found.'], 404);
-        return $this->sendOtpTo($request->email, 'Code sent.');
+        $request->validate(['email' => 'required|email']);
+        $email = strtolower(trim($request->email));
+
+        $user = User::where('email', $email)->first();
+        if (!$user) return response()->json(['message' => 'No account found with that email address.'], 404);
+
+        return $this->sendOtpTo($email, 'Verification code has been sent to your email.');
     }
 
     public function verifyCode(Request $request)
     {
-        if (!$this->validOtp($request->email, $request->code)) return response()->json(['message' => 'Invalid code.'], 400);
-        return response()->json(['message' => 'Verified.']);
+        $request->validate([
+            'email' => 'required|email',
+            'code' => 'required|string'
+        ]);
+
+        if (!$this->validOtp($request->email, $request->code)) {
+            return response()->json(['message' => 'Invalid or expired verification code.'], 400);
+        }
+
+        return response()->json(['message' => 'Code verified successfully.']);
     }
 
     public function resetPassword(Request $request)
