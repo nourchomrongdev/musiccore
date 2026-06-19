@@ -40,9 +40,8 @@ class OtpMail extends Mailable implements ShouldQueue
      */
     public function content(): Content
     {
-        // Check if plain text template exists, otherwise use basic content
         return new Content(
-            view: 'emails.otp', // Changed to view to support both
+            markdown: 'emails.otp',
             text: 'emails.otp-text',
             with: [
                 'otp' => $this->otp,
