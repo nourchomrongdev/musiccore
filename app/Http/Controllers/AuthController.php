@@ -72,7 +72,7 @@ class AuthController extends Controller
             );
 
             // Using failover mailer to ensure delivery even if SMTP fails
-            Mail::mailer('failover')->to($email)->send(new OtpMail($otp, $email));
+            Mail::to($email)->send(new OtpMail($otp, $email));
 
             Log::info("OTP sent successfully via SMTP to: $email");
             return response()->json(['message' => $successMessage]);
