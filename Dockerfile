@@ -23,8 +23,6 @@ RUN npm run build
 
 EXPOSE 10000
 
-<<<<<<< HEAD
 CMD php artisan serve --host=0.0.0.0 --port=${PORT:-10000}
-=======
-CMD php artisan serve --host=0.0.0.0 --port=${PORT:-10000}
->>>>>>> fabcf755ff3f032d043e86789253842ce7d33b63
+
+
