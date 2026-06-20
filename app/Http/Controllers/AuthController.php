@@ -175,7 +175,7 @@ class AuthController extends Controller
 
         if ($user->status !== 'active') return response()->json(['message' => 'Account is ' . $user->status], 403);
 
-        if (!$user->firebase_uid) {
+        if ($user->firebase_uid !== $payload['sub']) {
             $user->firebase_uid = $payload['sub'];
         }
         $user->is_verified = (bool) ($payload['email_verified'] ?? $user->is_verified);
@@ -183,6 +183,25 @@ class AuthController extends Controller
 
         $session = $this->issueToken($user, $request);
         return response()->json(['message' => 'Login successful', 'user' => $session['user'], 'token' => $session['token']]);
+    }
+
+    public function verifyLegacyLogin(Request $request)
+    {
+        $validated = $request->validate([
+            'email' => 'required|email|max:64',
+            'password' => 'required|min:6|max:64',
+        ]);
+
+        $user = User::where('email', strtolower($validated['email']))->first();
+        if (!$user || !Hash::check($validated['password'], $user->password)) {
+            return response()->json(['message' => 'Invalid email or password.'], 401);
+        }
+
+        if ($user->status !== 'active') {
+            return response()->json(['message' => 'Account is ' . $user->status], 403);
+        }
+
+        return response()->json(['message' => 'Legacy credentials verified.']);
     }
 
     public function profile(Request $request)

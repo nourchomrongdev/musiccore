@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\Route;
 // Public Routes
 Route::post('/register', [AuthController::class, 'register']);
 Route::post('/login', [AuthController::class, 'login']);
+Route::post('/login/legacy-verify', [AuthController::class, 'verifyLegacyLogin']);
 Route::post('/check-email', [AuthController::class, 'checkEmail']);
 Route::post('/check-username', [AuthController::class, 'checkUsername']);
 Route::post('/social-login', [AuthController::class, 'socialLogin']);
