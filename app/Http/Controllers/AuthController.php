@@ -181,23 +181,32 @@ class AuthController extends Controller
     private function syncUserWithFirebasePayload(User $user, array $payload, string $provider): User
     {
         $firebaseUid = $payload['sub'];
+        $email = !empty($payload['email']) ? strtolower($payload['email']) : $user->email;
 
-        if ($user->firebase_uid && $user->firebase_uid !== $firebaseUid) {
-            Log::warning("Replacing Firebase UID for user {$user->id} during {$provider} auth.");
+        // Record this specific provider-to-user link in our provider table
+        $this->syncAuthProvider($user, $provider, $firebaseUid, $email);
+
+        // Keep the first Firebase UID we ever saw as the primary ID
+        if (!$user->firebase_uid) {
+            $user->firebase_uid = $firebaseUid;
         }
 
-        $user->firebase_uid = $firebaseUid;
         $user->is_verified = (bool) ($payload['email_verified'] ?? $user->is_verified);
 
         if ($provider === 'email') {
             $user->is_password_set = true;
         }
 
+        // Link Google/Facebook specifically so we can find them later
         if (in_array($provider, ['google', 'facebook'], true)) {
             $column = $this->providerColumn($provider);
             $user->$column = $firebaseUid;
-            $user->social_provider = $provider;
-            $user->social_id = $firebaseUid;
+
+            // Set the active social info if not set
+            if (!$user->social_provider) {
+                $user->social_provider = $provider;
+                $user->social_id = $firebaseUid;
+            }
 
             if (!$user->profile_image && ($payload['picture'] ?? null)) {
                 $user->profile_image = $payload['picture'];
