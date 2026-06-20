@@ -12,6 +12,10 @@ class Otp extends Model
         'expires_at'
     ];
 
+    protected $casts = [
+        'expires_at' => 'datetime',
+    ];
+
     /**
      * Ensure the email is stored in lowercase.
      */

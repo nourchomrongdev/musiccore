@@ -56,11 +56,24 @@ class AuthController extends Controller
 
     private function validOtp(string $email, string $code): ?Otp
     {
-        $record = Otp::where('email', strtolower(trim($email)))
-            ->where('otp', trim($code))
+        $email = strtolower(trim($email));
+        $code = trim($code);
+
+        $record = Otp::where('email', $email)
+            ->where('otp', $code)
+            ->latest()
             ->first();
 
-        if (!$record || now()->gt($record->expires_at)) return null;
+        if (!$record) {
+            Log::warning("OTP Verification Failed: No record found for $email with code $code");
+            return null;
+        }
+
+        if (now()->gt($record->expires_at)) {
+            Log::warning("OTP Verification Failed: Code expired for $email. Expired at: " . $record->expires_at);
+            return null;
+        }
+
         return $record;
     }
 
@@ -70,29 +83,50 @@ class AuthController extends Controller
         $otp = (string) random_int(100000, 999999);
 
         try {
+            // Store or update the OTP in the 'otps' table
             Otp::updateOrCreate(
                 ['email' => $email],
-                ['otp' => $otp, 'expires_at' => now()->addMinutes(15)]
+                [
+                    'otp' => $otp,
+                    'expires_at' => now()->addMinutes(15),
+                    'created_at' => now(), // Force update timestamp
+                ]
             );
 
-            Mail::mailer('resend')->to($email)->send(new OtpMail($otp, $email));
+            // Attempt to send email
+            try {
+                Mail::mailer('resend')->to($email)->send(new OtpMail($otp, $email));
+                Log::info("OTP sent successfully via Resend to: $email");
+            } catch (Exception $mailEx) {
+                Log::error('OTP Mail Delivery Error: ' . $mailEx->getMessage());
+                // Continue to return success if in debug mode so user can use the code from logs/response
+                if (!config('app.debug') && !app()->environment('local')) {
+                    throw $mailEx;
+                }
+            }
 
-            Log::info("OTP sent successfully via Resend to: $email");
-            return response()->json(['message' => $successMessage]);
+            $response = ['message' => $successMessage];
+
+            // For development/local testing, include the code in response to "see" it easily
+            if (config('app.debug') || app()->environment('local')) {
+                $response['debug_code'] = $otp;
+                $response['message'] .= " (Debug: $otp)";
+            }
+
+            return response()->json($response);
 
         } catch (Exception $e) {
-            Log::error('OTP Mail Error: ' . $e->getMessage());
-            // Fallback to log for debugging if SMTP/Resend fails
+            Log::error('OTP Store/Process Error: ' . $e->getMessage());
             Log::info("FALLBACK: OTP for $email is $otp");
 
-            // For development/local testing, we return success so they can check logs
             if (config('app.debug') || app()->environment('local')) {
                 return response()->json([
-                    'message' => $successMessage . ' (Check server logs for the code)'
+                    'message' => $successMessage . ' (Error occurred, but here is your code: ' . $otp . ')',
+                    'debug_code' => $otp
                 ]);
             }
 
-            return response()->json(['message' => 'Email delivery failed. Please try again later.'], 500);
+            return response()->json(['message' => 'Service temporarily unavailable. Please try again later.'], 500);
         }
     }
 
