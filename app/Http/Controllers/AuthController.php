@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\User;
 use App\Models\Otp;
+use App\Models\Role;
 use App\Mail\OtpMail;
 use App\Services\FirebaseAuthService;
 use Illuminate\Http\Request;
@@ -116,6 +117,41 @@ class AuthController extends Controller
         return $provider === 'google' ? 'google_id' : 'facebook_id';
     }
 
+    private function userRoleId(): int
+    {
+        return Role::firstOrCreate(['role_name' => 'user'])->id;
+    }
+
+    private function createUserFromFirebasePayload(array $payload, string $email): User
+    {
+        $provider = $this->firebaseProvider($payload);
+        $socialProvider = match ($provider) {
+            'google.com' => 'google',
+            'facebook.com' => 'facebook',
+            default => null,
+        };
+
+        $userData = [
+            'role_id' => $this->userRoleId(),
+            'username' => $this->generateUniqueUsername($payload['name'] ?? explode('@', $email)[0]),
+            'email' => $email,
+            'password' => Hash::make(random_bytes(16)),
+            'is_password_set' => $provider === 'password',
+            'profile_image' => $payload['picture'] ?? null,
+            'firebase_uid' => $payload['sub'],
+            'social_provider' => $socialProvider,
+            'social_id' => $socialProvider ? $payload['sub'] : null,
+            'is_verified' => (bool) ($payload['email_verified'] ?? false),
+            'status' => 'active',
+        ];
+
+        if ($socialProvider) {
+            $userData[$this->providerColumn($socialProvider)] = $payload['sub'];
+        }
+
+        return User::create($userData);
+    }
+
     public function register(Request $request)
     {
         $validated = $request->validate([
@@ -171,7 +207,9 @@ class AuthController extends Controller
         }
 
         $user = User::where('firebase_uid', $payload['sub'])->orWhere('email', $email)->first();
-        if (!$user) return response()->json(['message' => 'No backend account found for this Firebase user.'], 404);
+        if (!$user) {
+            $user = $this->createUserFromFirebasePayload($payload, $email);
+        }
 
         if ($user->status !== 'active') return response()->json(['message' => 'Account is ' . $user->status], 403);
 
@@ -201,7 +239,23 @@ class AuthController extends Controller
             return response()->json(['message' => 'Account is ' . $user->status], 403);
         }
 
-        return response()->json(['message' => 'Legacy credentials verified.']);
+        $firebaseSynced = false;
+        if (!$user->firebase_uid) {
+            $firebaseUid = $this->firebaseAuth->syncEmailPasswordUser($user->email, $validated['password']);
+            if ($firebaseUid) {
+                $user->forceFill([
+                    'firebase_uid' => $firebaseUid,
+                    'is_password_set' => true,
+                ])->save();
+                $firebaseSynced = true;
+            }
+        }
+
+        return response()->json([
+            'message' => 'Legacy credentials verified.',
+            'firebase_synced' => $firebaseSynced,
+            'firebase_uid' => $user->firebase_uid,
+        ]);
     }
 
     public function profile(Request $request)

@@ -88,6 +88,65 @@ class FirebaseAuthService
         }
     }
 
+    public function syncEmailPasswordUser(string $email, string $password): ?string
+    {
+        try {
+            $apiKey = config('services.firebase.api_key');
+            if (!$apiKey) {
+                Log::error('Firebase API key is not configured.');
+                return null;
+            }
+
+            $response = Http::post(
+                "https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={$apiKey}",
+                [
+                    'email' => strtolower(trim($email)),
+                    'password' => $password,
+                    'returnSecureToken' => false,
+                ]
+            );
+
+            if ($response->successful()) {
+                return $response->json('localId');
+            }
+
+            $errorMessage = $response->json('error.message');
+            if ($errorMessage === 'EMAIL_EXISTS') {
+                return $this->signInEmailPasswordUser($email, $password);
+            }
+
+            Log::error('Firebase email/password sync failed: ' . $response->body());
+            return null;
+        } catch (Exception $e) {
+            Log::error('Firebase email/password sync exception: ' . $e->getMessage());
+            return null;
+        }
+    }
+
+    private function signInEmailPasswordUser(string $email, string $password): ?string
+    {
+        $apiKey = config('services.firebase.api_key');
+        if (!$apiKey) {
+            return null;
+        }
+
+        $response = Http::post(
+            "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={$apiKey}",
+            [
+                'email' => strtolower(trim($email)),
+                'password' => $password,
+                'returnSecureToken' => false,
+            ]
+        );
+
+        if ($response->successful()) {
+            return $response->json('localId');
+        }
+
+        Log::error('Firebase email/password sign-in failed during sync: ' . $response->body());
+        return null;
+    }
+
     private function firebaseCerts(): array
     {
         return Cache::remember('firebase_securetoken_certs', now()->addHours(6), function () {
