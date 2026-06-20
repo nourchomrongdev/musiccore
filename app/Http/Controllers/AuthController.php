@@ -516,7 +516,11 @@ class AuthController extends Controller
             }
         }
 
-        if (!$this->firebaseAuth->updatePassword($user->firebase_uid, $validated['password'])) {
+        $firebasePasswordUpdated = $currentPasswordOk
+            ? $this->firebaseAuth->updatePasswordWithEmailPassword($user->email, $currentPassword, $validated['password'])
+            : $this->firebaseAuth->updatePassword($user->firebase_uid, $validated['password']);
+
+        if (!$firebasePasswordUpdated) {
             return response()->json(['message' => 'Could not update Firebase password.'], 502);
         }
 

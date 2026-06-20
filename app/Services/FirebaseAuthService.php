@@ -112,7 +112,7 @@ class FirebaseAuthService
 
             $errorMessage = $response->json('error.message');
             if ($errorMessage === 'EMAIL_EXISTS') {
-                return $this->signInEmailPasswordUser($email, $password);
+                return $this->signInEmailPasswordUser($email, $password)['localId'] ?? null;
             }
 
             Log::error('Firebase email/password sync failed: ' . $response->body());
@@ -123,7 +123,43 @@ class FirebaseAuthService
         }
     }
 
-    private function signInEmailPasswordUser(string $email, string $password): ?string
+    public function updatePasswordWithEmailPassword(string $email, string $currentPassword, string $newPassword): bool
+    {
+        try {
+            $apiKey = config('services.firebase.api_key');
+            if (!$apiKey) {
+                Log::error('Firebase API key is not configured.');
+                return false;
+            }
+
+            $firebaseUser = $this->signInEmailPasswordUser($email, $currentPassword);
+            $idToken = $firebaseUser['idToken'] ?? null;
+            if (!$idToken) {
+                return false;
+            }
+
+            $response = Http::post(
+                "https://identitytoolkit.googleapis.com/v1/accounts:update?key={$apiKey}",
+                [
+                    'idToken' => $idToken,
+                    'password' => $newPassword,
+                    'returnSecureToken' => false,
+                ]
+            );
+
+            if ($response->successful()) {
+                return true;
+            }
+
+            Log::error('Firebase password update with current password failed: ' . $response->body());
+            return false;
+        } catch (Exception $e) {
+            Log::error('Firebase password update with current password exception: ' . $e->getMessage());
+            return false;
+        }
+    }
+
+    private function signInEmailPasswordUser(string $email, string $password): ?array
     {
         $apiKey = config('services.firebase.api_key');
         if (!$apiKey) {
@@ -140,7 +176,7 @@ class FirebaseAuthService
         );
 
         if ($response->successful()) {
-            return $response->json('localId');
+            return $response->json();
         }
 
         Log::error('Firebase email/password sign-in failed during sync: ' . $response->body());

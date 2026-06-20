@@ -203,10 +203,11 @@ test('change password syncs missing firebase account before updating firebase pa
             ->once()
             ->with('change@example.com', 'oldpass123')
             ->andReturn('firebase-change-uid');
-        $mock->shouldReceive('updatePassword')
+        $mock->shouldReceive('updatePasswordWithEmailPassword')
             ->once()
-            ->with('firebase-change-uid', 'newpass123')
+            ->with('change@example.com', 'oldpass123', 'newpass123')
             ->andReturn(true);
+        $mock->shouldNotReceive('updatePassword');
     });
 
     $response = $this->postJson('/api/user/change-password', [
@@ -222,4 +223,36 @@ test('change password syncs missing firebase account before updating firebase pa
         'firebase_uid' => 'firebase-change-uid',
         'is_password_set' => true,
     ]);
+});
+
+test('change password with current password updates existing firebase account using web api credentials', function () {
+    $role = \App\Models\Role::firstOrCreate(['role_name' => 'user']);
+
+    $user = User::create([
+        'role_id' => $role->id,
+        'username' => 'existingfire',
+        'email' => 'existingfire@example.com',
+        'password' => bcrypt('oldpass123'),
+        'firebase_uid' => 'firebase-existing-uid',
+        'status' => 'active',
+    ]);
+
+    Sanctum::actingAs($user);
+
+    $this->mock(FirebaseAuthService::class, function ($mock) {
+        $mock->shouldReceive('updatePasswordWithEmailPassword')
+            ->once()
+            ->with('existingfire@example.com', 'oldpass123', 'newpass123')
+            ->andReturn(true);
+        $mock->shouldNotReceive('syncEmailPasswordUser');
+        $mock->shouldNotReceive('updatePassword');
+    });
+
+    $response = $this->postJson('/api/user/change-password', [
+        'current_password' => 'oldpass123',
+        'password' => 'newpass123',
+        'password_confirmation' => 'newpass123',
+    ]);
+
+    $response->assertOk()->assertJsonPath('message', 'Password changed.');
 });
