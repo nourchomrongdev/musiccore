@@ -84,49 +84,31 @@ class AuthController extends Controller
 
         try {
             // Store or update the OTP in the 'otps' table
+            
             Otp::updateOrCreate(
                 ['email' => $email],
                 [
                     'otp' => $otp,
                     'expires_at' => now()->addMinutes(15),
-                    'created_at' => now(), // Force update timestamp
+                    'updated_at' => now(),
                 ]
             );
 
-            // Attempt to send email
+            // Attempt to send email via Resend
             try {
                 Mail::mailer('resend')->to($email)->send(new OtpMail($otp, $email));
-                Log::info("OTP sent successfully via Resend to: $email");
+                Log::info("OTP Mailable sent to: $email");
             } catch (Exception $mailEx) {
                 Log::error('OTP Mail Delivery Error: ' . $mailEx->getMessage());
-                // Continue to return success if in debug mode so user can use the code from logs/response
-                if (!config('app.debug') && !app()->environment('local')) {
-                    throw $mailEx;
-                }
+                // We don't throw here so the user can still verify if they have access to the DB/Logs
             }
 
-            $response = ['message' => $successMessage];
-
-            // For development/local testing, include the code in response to "see" it easily
-            if (config('app.debug') || app()->environment('local')) {
-                $response['debug_code'] = $otp;
-                $response['message'] .= " (Debug: $otp)";
-            }
-
-            return response()->json($response);
+            // Always return a clean message to the frontend without the code
+            return response()->json(['message' => $successMessage]);
 
         } catch (Exception $e) {
-            Log::error('OTP Store/Process Error: ' . $e->getMessage());
-            Log::info("FALLBACK: OTP for $email is $otp");
-
-            if (config('app.debug') || app()->environment('local')) {
-                return response()->json([
-                    'message' => $successMessage . ' (Error occurred, but here is your code: ' . $otp . ')',
-                    'debug_code' => $otp
-                ]);
-            }
-
-            return response()->json(['message' => 'Service temporarily unavailable. Please try again later.'], 500);
+            Log::error('OTP Store Error: ' . $e->getMessage());
+            return response()->json(['message' => 'Failed to process request. Please try again.'], 500);
         }
     }
 
