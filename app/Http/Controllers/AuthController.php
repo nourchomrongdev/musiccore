@@ -245,6 +245,10 @@ class AuthController extends Controller
         if ($emailProvider) {
             $exists = $this->firebaseAuth->firebaseUserExists($emailProvider->firebase_uid);
             if ($exists !== false) {
+                if ($exists && !$this->firebaseAuth->updatePassword($emailProvider->firebase_uid, $password)) {
+                    return false;
+                }
+
                 if (!$user->firebase_uid) {
                     $user->forceFill(['firebase_uid' => $emailProvider->firebase_uid])->save();
                 }
@@ -255,6 +259,10 @@ class AuthController extends Controller
         if (!$emailProvider && $this->hasFirebaseEmailPasswordProvider($user)) {
             $exists = $this->firebaseAuth->firebaseUserExists($user->firebase_uid);
             if ($exists !== false) {
+                if ($exists && !$this->firebaseAuth->updatePassword($user->firebase_uid, $password)) {
+                    return false;
+                }
+
                 $this->syncAuthProvider($user, 'email', $user->firebase_uid, $user->email);
                 $user->forceFill(['is_password_set' => true])->save();
                 return true;

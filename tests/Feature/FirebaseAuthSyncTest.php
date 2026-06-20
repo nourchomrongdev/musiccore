@@ -167,6 +167,47 @@ test('legacy verification syncs backend password account to firebase when uid is
     ]);
 });
 
+test('legacy verification repairs existing firebase password after database password is verified', function () {
+    $role = \App\Models\Role::firstOrCreate(['role_name' => 'user']);
+
+    $user = User::create([
+        'role_id' => $role->id,
+        'username' => 'repairfire',
+        'email' => 'repair@example.com',
+        'password' => bcrypt('secret123'),
+        'firebase_uid' => 'firebase-repair-uid',
+        'is_password_set' => true,
+        'status' => 'active',
+    ]);
+
+    $user->authProviders()->create([
+        'provider' => 'email',
+        'firebase_uid' => 'firebase-repair-uid',
+        'email' => 'repair@example.com',
+    ]);
+
+    $this->mock(FirebaseAuthService::class, function ($mock) {
+        $mock->shouldReceive('firebaseUserExists')
+            ->once()
+            ->with('firebase-repair-uid')
+            ->andReturn(true);
+        $mock->shouldReceive('updatePassword')
+            ->once()
+            ->with('firebase-repair-uid', 'secret123')
+            ->andReturn(true);
+        $mock->shouldNotReceive('syncEmailPasswordUser');
+    });
+
+    $response = $this->postJson('/api/login/legacy-verify', [
+        'email' => 'repair@example.com',
+        'password' => 'secret123',
+    ]);
+
+    $response
+        ->assertOk()
+        ->assertJsonPath('firebase_uid', 'firebase-repair-uid');
+});
+
 test('legacy verification does not sync firebase when database password is invalid', function () {
     $role = \App\Models\Role::firstOrCreate(['role_name' => 'user']);
 
