@@ -240,38 +240,32 @@ class AuthController extends Controller
     {
         $validated = $request->validate([
             'username' => 'required|string|max:32|unique:users,username',
-            'email' => 'required|email|max:64',
-            'firebase_id_token' => 'required|string',
+            'email' => 'required|email|max:64|unique:users,email',
+            'password' => 'required|min:8|max:64',
         ]);
 
-        $payload = $this->firebaseAuth->verifyIdToken($validated['firebase_id_token']);
-        if (!$payload || empty($payload['sub'])) {
-            return response()->json(['message' => 'Firebase authentication failed.'], 401);
-        }
+        $email = strtolower($validated['email']);
 
-        if ($this->appProviderFromFirebase($payload) !== 'email') {
-            return response()->json(['message' => 'Use social login for this Firebase provider.'], 422);
-        }
-
-        $email = strtolower($payload['email'] ?? $validated['email']);
-        if ($email !== strtolower($validated['email'])) {
-            return response()->json(['message' => 'Firebase email does not match request email.'], 422);
-        }
-
-        if ($this->findUserForFirebasePayload($payload, $email, 'email')) {
-            return response()->json(['message' => 'This account is already registered.'], 409);
-        }
-
+        // 1. Create User in Backend
         $user = User::create([
             'role_id' => $this->userRoleId(),
             'username' => $validated['username'],
             'email' => $email,
-            'password' => Hash::make(random_bytes(16)),
+            'password' => Hash::make($validated['password']),
             'is_password_set' => true,
-            'firebase_uid' => $payload['sub'],
-            'is_verified' => (bool) ($payload['email_verified'] ?? false),
             'status' => 'active',
         ]);
+
+        // 2. Sync with Firebase in Background (Create account in Firebase so social linking works)
+        try {
+            $firebaseUid = $this->firebaseAuth->createEmailPasswordUser($email, $validated['password']);
+            if ($firebaseUid) {
+                $user->forceFill(['firebase_uid' => $firebaseUid])->save();
+                $this->syncAuthProvider($user, 'email', $firebaseUid, $email);
+            }
+        } catch (Exception $e) {
+            Log::error('Firebase Sync Error during Registration: ' . $e->getMessage());
+        }
 
         $session = $this->issueToken($user, $request);
         return response()->json(['message' => 'Registered successfully', 'user' => $session['user'], 'token' => $session['token']], 201);
@@ -281,31 +275,29 @@ class AuthController extends Controller
     {
         $validated = $request->validate([
             'email' => 'required|email|max:64',
-            'firebase_id_token' => 'required|string',
+            'password' => 'required|string',
         ]);
 
-        $payload = $this->firebaseAuth->verifyIdToken($validated['firebase_id_token']);
-        if (!$payload || empty($payload['sub'])) {
-            return response()->json(['message' => 'Firebase authentication failed.'], 401);
+        $email = strtolower($validated['email']);
+        $user = User::where('email', $email)->first();
+
+        if (!$user || !Hash::check($validated['password'], $user->password)) {
+            return response()->json(['message' => 'Invalid email or password.'], 401);
         }
 
-        if ($this->appProviderFromFirebase($payload) !== 'email') {
-            return response()->json(['message' => 'Use social login for this Firebase provider.'], 422);
+        if ($user->status !== 'active') {
+            return response()->json(['message' => 'Account is ' . $user->status], 403);
         }
 
-        $email = strtolower($payload['email'] ?? $validated['email']);
-        if ($email !== strtolower($validated['email'])) {
-            return response()->json(['message' => 'Firebase email does not match request email.'], 422);
+        // 3. Ensure User is synced with Firebase (if they were created before we added Firebase)
+        try {
+            if (!$user->firebase_uid) {
+                $this->ensureFirebaseEmailPasswordUser($user, $validated['password']);
+            }
+        } catch (Exception $e) {
+            Log::error('Firebase Sync Error during Login: ' . $e->getMessage());
+            // Continue login even if sync fails
         }
-
-        $user = $this->findUserForFirebasePayload($payload, $email, 'email');
-        if (!$user) {
-            $user = $this->createUserFromFirebasePayload($payload, $email);
-        }
-
-        if ($user->status !== 'active') return response()->json(['message' => 'Account is ' . $user->status], 403);
-
-        $user = $this->syncUserWithFirebasePayload($user, $payload, 'email');
 
         $session = $this->issueToken($user, $request);
         return response()->json(['message' => 'Login successful', 'user' => $session['user'], 'token' => $session['token']]);
