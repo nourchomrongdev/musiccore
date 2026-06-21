@@ -175,20 +175,35 @@ class AuthController extends Controller
         $firebaseUid = $payload['sub'] ?? null;
         $provider ??= $this->appProviderFromFirebase($payload);
 
-        $query = User::query();
+        // 1. Try finding by existing Firebase connection for this provider
+        $providerLink = UserAuthProvider::where('provider', $provider)
+            ->where('firebase_uid', $firebaseUid)
+            ->first();
+
+        if ($providerLink?->user) {
+            return $providerLink->user;
+        }
+
+        // 2. Try finding by the primary firebase_uid
         if ($firebaseUid) {
-            $query->where('firebase_uid', $firebaseUid);
+            $user = User::where('firebase_uid', $firebaseUid)->first();
+            if ($user) return $user;
         }
 
+        // 3. Try finding by provider-specific legacy columns
         if (in_array($provider, ['google', 'facebook'], true) && $firebaseUid) {
-            $query->orWhere($this->providerColumn($provider), $firebaseUid);
+            $column = $this->providerColumn($provider);
+            $user = User::where($column, $firebaseUid)->first();
+            if ($user) return $user;
         }
 
+        // 4. Try finding by Email (IMPORTANT for linking different social accounts)
         if ($email) {
-            $query->orWhere('email', strtolower($email));
+            $user = User::where('email', strtolower($email))->first();
+            if ($user) return $user;
         }
 
-        return $query->first();
+        return null;
     }
 
     private function syncUserWithFirebasePayload(User $user, array $payload, string $provider): User
@@ -466,17 +481,34 @@ class AuthController extends Controller
             return response()->json(['message' => 'Firebase provider does not match request provider.'], 422);
         }
 
-        $email = !empty($payload['email']) ? strtolower($payload['email']) : null;
+        // Try to get email from Payload first, then from Request
+        $email = $payload['email'] ?? $request->input('email');
+        if ($email) {
+            $email = strtolower(trim($email));
+        }
+
+        Log::info("Social Login processing: Provider={$request->provider}, Email=" . ($email ?? 'NULL'));
+
         $user = $this->findUserForFirebasePayload($payload, $email, $request->provider);
 
         if ($user) {
             if ($user->status !== 'active') return response()->json(['message' => 'Forbidden'], 403);
+
+            // If user exists but email is null in DB (unlikely but possible), update it if we have it now
+            if (!$user->email && $email) {
+                $user->email = $email;
+            }
+
             $user = $this->syncUserWithFirebasePayload($user, $payload, $request->provider);
         } else {
+            // Support users without emails (e.g. some Facebook accounts)
+            // But if we HAVE an email from providerData (sent via request), use it!
+            $finalEmail = $email ?: ($request->provider . '_' . $payload['sub'] . '@social.musicapp');
+
             $user = User::create([
                 'role_id' => $this->userRoleId(),
                 'username' => $this->generateUniqueUsername($payload['name'] ?? ($email ? explode('@', $email)[0] : 'user')),
-                'email' => $email,
+                'email' => $finalEmail,
                 'password' => Hash::make(random_bytes(16)),
                 'is_password_set' => false,
                 'profile_image' => $payload['picture'] ?? null,
@@ -487,6 +519,7 @@ class AuthController extends Controller
                 'is_verified' => (bool) ($payload['email_verified'] ?? false),
                 'status' => 'active',
             ]);
+            $this->syncAuthProvider($user, $request->provider, $payload['sub'], $finalEmail);
         }
 
         $session = $this->issueToken($user, $request);
