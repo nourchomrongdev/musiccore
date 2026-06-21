@@ -418,21 +418,13 @@ class AuthController extends Controller
 
         $user = User::where('email', strtolower($request->email))->first();
         if (!$user || !$this->validOtp($request->email, $request->code)) return response()->json(['message' => 'Invalid request.'], 400);
-
-        if (!$user->firebase_uid) {
-            if (!$this->ensureFirebaseEmailPasswordUser($user, $request->password)) {
-                return response()->json(['message' => 'Could not create Firebase account.'], 502);
-            }
-        } elseif (!$this->firebaseAuth->updatePassword($user->firebase_uid, $request->password)) {
-            return response()->json(['message' => 'Could not update Firebase password.'], 502);
-        }
-
         $user->password = Hash::make($request->password);
         $user->is_password_set = true;
         $user->save();
+
         Otp::where('email', strtolower($request->email))->delete();
 
-        return response()->json(['message' => 'Password reset.']);
+        return response()->json(['message' => 'Password reset successfully.']);
     }
 
     public function updateProfile(Request $request)
@@ -607,28 +599,14 @@ class AuthController extends Controller
 
         if (!$authOk) return response()->json(['message' => 'Invalid authentication.'], 422);
 
-        if (!$user->firebase_uid) {
-            $syncPassword = $currentPasswordOk ? $currentPassword : $validated['password'];
-            if (!$this->ensureFirebaseEmailPasswordUser($user, $syncPassword)) {
-                return response()->json(['message' => 'Could not create Firebase account.'], 502);
-            }
-        }
-
-        $firebasePasswordUpdated = $currentPasswordOk
-            ? $this->firebaseAuth->updatePasswordWithEmailPassword($user->email, $currentPassword, $validated['password'])
-            : $this->firebaseAuth->updatePassword($user->firebase_uid, $validated['password']);
-
-        if (!$firebasePasswordUpdated) {
-            return response()->json(['message' => 'Could not update Firebase password.'], 502);
-        }
-
+        // Update password only in backend database
         $user->password = Hash::make($validated['password']);
         $user->is_password_set = true;
         $user->save();
 
         if ($code) Otp::where('email', strtolower($user->email))->delete();
 
-        return response()->json(['message' => 'Password changed.']);
+        return response()->json(['message' => 'Password changed successfully.']);
     }
 
     public function connectSocialAccount(Request $request)
